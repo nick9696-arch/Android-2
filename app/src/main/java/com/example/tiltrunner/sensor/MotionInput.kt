@@ -6,9 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.asin
 import kotlin.math.atan2
-import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
@@ -38,10 +36,17 @@ class MotionInput(context: Context) : SensorEventListener {
     private var gz = 0f
     private var haveGravity = false
 
+    // Neigung relativ zur kalibrierten Haltung (0 = Haltung beim Start). Funktioniert in jeder Lage,
+    // z. B. auch im Liegen mit dem Handy schräg über dem Kopf.
     @Volatile private var roll = 0f
     @Volatile private var pitch = 0f
-    @Volatile private var neutralRoll = 0f
-    @Volatile private var neutralPitch = 0f
+
+    // Bezugssystem aus der Kalibrierung, in Gerätekoordinaten:
+    // up = Richtung "oben" in neutraler Haltung, right = Geräte-x-Achse waagerecht gemacht,
+    // forward = right x up (bei aufrechtem Handy: Oberkante vom Körper weg).
+    private var upX = 0f; private var upY = 1f; private var upZ = 0f
+    private var rightX = 1f; private var rightY = 0f; private var rightZ = 0f
+    private var fwdX = 0f; private var fwdY = 0f; private var fwdZ = 1f
 
     private val jumpFlag = AtomicBoolean(false)
     private var lastJumpNs = 0L
@@ -60,16 +65,33 @@ class MotionInput(context: Context) : SensorEventListener {
 
     /** Aktuelle Handyhaltung als "neutral" (geradeaus, Grundtempo) merken. */
     fun calibrate() {
-        neutralRoll = roll
-        neutralPitch = pitch
+        val n = sqrt(gx * gx + gy * gy + gz * gz)
+        if (haveGravity && n > 1f) {
+            upX = gx / n; upY = gy / n; upZ = gz / n
+            // Geräte-x-Achse senkrecht zu "oben" machen
+            var rx = 1f - upX * upX
+            var ry = -upX * upY
+            var rz = -upX * upZ
+            val rn = sqrt(rx * rx + ry * ry + rz * rz)
+            if (rn > 0.1f) { // sonst läge das Handy auf der Seite (Quermodus), das ist nicht vorgesehen
+                rx /= rn; ry /= rn; rz /= rn
+                rightX = rx; rightY = ry; rightZ = rz
+                // forward = right x up
+                fwdX = ry * upZ - rz * upY
+                fwdY = rz * upX - rx * upZ
+                fwdZ = rx * upY - ry * upX
+            }
+        }
+        roll = 0f
+        pitch = 0f
         jumpFlag.set(false)
     }
 
     /** -1 (links) .. 1 (rechts). */
-    fun steer(): Float = scaled(roll - neutralRoll, deadzone = DEADZONE, full = STEER_FULL)
+    fun steer(): Float = scaled(roll, deadzone = DEADZONE, full = STEER_FULL)
 
     /** -1 (zurück, langsamer) .. 1 (nach vorn, schneller). */
-    fun throttle(): Float = scaled(pitch - neutralPitch, deadzone = DEADZONE, full = THROTTLE_FULL)
+    fun throttle(): Float = scaled(pitch, deadzone = DEADZONE, full = THROTTLE_FULL)
 
     /** true, wenn seit dem letzten Aufruf ein Ruck erkannt wurde. */
     fun consumeJump(): Boolean = jumpFlag.getAndSet(false)
@@ -102,11 +124,14 @@ class MotionInput(context: Context) : SensorEventListener {
         }
         val norm = sqrt(gx * gx + gy * gy + gz * gz)
         if (norm < 1f) return
-        // Die Sensoren messen die Gegenkraft zur Schwerkraft: Ist die linke Seite tiefer, zeigt die
-        // x-Achse (nach rechts) nach oben und gx wird positiv. Deshalb das Minus: links tiefer = negativ = links.
-        // Nicken: Oberkante vom Körper weg = positiv = "nach vorn".
-        roll = -asin((gx / norm).coerceIn(-1f, 1f))
-        pitch = atan2(gz, hypot(gx, gy))
+        // Die Sensoren messen die Gegenkraft zur Schwerkraft (Vektor zeigt nach oben). Zerlegt in das
+        // Bezugssystem der Kalibrierung: cr = nach rechts, cf = nach vorn, cu = nach oben.
+        // Ist die linke Seite tiefer, zeigt "rechts" nach oben und cr wird positiv: Minus = links.
+        val cr = (gx * rightX + gy * rightY + gz * rightZ) / norm
+        val cf = (gx * fwdX + gy * fwdY + gz * fwdZ) / norm
+        val cu = (gx * upX + gy * upY + gz * upZ) / norm
+        roll = -atan2(cr, cu)
+        pitch = atan2(cf, cu)
     }
 
     private fun detectJerk(lx: Float, ly: Float, lz: Float, timestampNs: Long) {
