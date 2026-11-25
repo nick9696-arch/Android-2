@@ -1,29 +1,27 @@
 package com.example.tiltrunner.data
 
 import android.content.Context
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.floatPreferencesKey
-import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 
-private val Context.dataStore by preferencesDataStore(name = "tiltrunner")
+/** Highscore und Sprung-Empfindlichkeit, gespeichert in SharedPreferences. */
+class Settings(context: Context) {
+    private val prefs = context.getSharedPreferences("tiltrunner", Context.MODE_PRIVATE)
 
-class Settings(private val context: Context) {
-    private val highScoreKey = intPreferencesKey("high_score")
-    private val jumpThresholdKey = floatPreferencesKey("jump_threshold")
+    var highScore: Int
+        get() = prefs.getInt(KEY_HIGH_SCORE, 0)
+        private set(value) = prefs.edit().putInt(KEY_HIGH_SCORE, value).apply()
 
-    val highScore: Flow<Int> = context.dataStore.data.map { it[highScoreKey] ?: 0 }
-    val jumpThreshold: Flow<Float> = context.dataStore.data.map { it[jumpThresholdKey] ?: DEFAULT_JUMP_THRESHOLD }
+    var jumpThreshold: Float
+        get() = prefs.getFloat(KEY_JUMP_THRESHOLD, DEFAULT_JUMP_THRESHOLD)
+        set(value) = prefs.edit().putFloat(KEY_JUMP_THRESHOLD, value).apply()
 
-    suspend fun saveHighScore(score: Int) = context.dataStore.edit { prefs ->
-        if (score > (prefs[highScoreKey] ?: 0)) prefs[highScoreKey] = score
+    /** Speichert den Wert nur, wenn er den bisherigen Rekord übertrifft. */
+    fun saveHighScore(score: Int) {
+        if (score > highScore) highScore = score
     }
-
-    suspend fun saveJumpThreshold(value: Float) = context.dataStore.edit { it[jumpThresholdKey] = value }
 
     companion object {
         const val DEFAULT_JUMP_THRESHOLD = 8f
+        private const val KEY_HIGH_SCORE = "high_score"
+        private const val KEY_JUMP_THRESHOLD = "jump_threshold"
     }
 }
