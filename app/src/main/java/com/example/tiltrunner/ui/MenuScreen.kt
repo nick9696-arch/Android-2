@@ -29,7 +29,8 @@ import com.example.tiltrunner.data.Settings
 
 @Composable
 fun MenuScreen(onStart: () -> Unit) {
-    val settings = remember { Settings(LocalContext.current) }
+    val context = LocalContext.current
+    val settings = remember { Settings(context) }
     var highScore by remember { mutableIntStateOf(settings.highScore) }
     var jumpThreshold by remember { mutableFloatStateOf(settings.jumpThreshold) }
 
