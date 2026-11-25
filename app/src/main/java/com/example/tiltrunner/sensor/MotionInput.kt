@@ -102,8 +102,10 @@ class MotionInput(context: Context) : SensorEventListener {
         }
         val norm = sqrt(gx * gx + gy * gy + gz * gz)
         if (norm < 1f) return
-        // Rollen: links/rechts kippen. Nicken: Oberkante vom Körper weg = positiv = "nach vorn".
-        roll = asin((gx / norm).coerceIn(-1f, 1f))
+        // Die Sensoren messen die Gegenkraft zur Schwerkraft: Ist die linke Seite tiefer, zeigt die
+        // x-Achse (nach rechts) nach oben und gx wird positiv. Deshalb das Minus: links tiefer = negativ = links.
+        // Nicken: Oberkante vom Körper weg = positiv = "nach vorn".
+        roll = -asin((gx / norm).coerceIn(-1f, 1f))
         pitch = atan2(gz, hypot(gx, gy))
     }
 
