@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.TiltRunner" parent="android:Theme.Material.NoActionBar" />
+</resources>
