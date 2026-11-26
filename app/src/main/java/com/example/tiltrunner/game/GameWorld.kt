@@ -65,7 +65,7 @@ class GameWorld(random: Random = Random.Default) {
             vu += a * d
             u += vu * d
 
-            if (input.jump && h <= 0f) {
+            if (input.jump && h <= 0f && jumpAllowed()) {
                 // Sprungweite ist unabhängig vom Tempo, damit Lücken immer gleich überspringbar sind
                 val airTime = JUMP_DISTANCE / max(speed, MIN_SPEED)
                 vh = 4f * JUMP_HEIGHT / airTime
@@ -90,13 +90,20 @@ class GameWorld(random: Random = Random.Default) {
         track.prune(s)
     }
 
+    /** Springen geht nur kurz vor einer komplett unterbrochenen Bahn, nicht bei Teil-Lücken oder Abzweigungen. */
+    private fun jumpAllowed(): Boolean {
+        val range = max(JUMP_ALLOW_RANGE, speed * 0.7f)
+        return track.gaps.any { it.full && it.s1 > s && it.s0 - s <= range }
+    }
+
     companion object {
         const val MIN_SPEED = 5f
         const val MAX_SPEED = 21f
         const val SPEED_RESPONSE = 6f
-        const val RONDELL_SPEED = 9f
-        const val STEER_ACCEL = 10f
-        const val LATERAL_DAMPING = 2.5f
+        const val RONDELL_SPEED = 15f
+        const val STEER_ACCEL = 28f
+        const val LATERAL_DAMPING = 5.5f
+        const val JUMP_ALLOW_RANGE = 14f
         const val JUMP_DISTANCE = 9f
         const val JUMP_HEIGHT = 1.1f
         const val FALL_GRAVITY = 25f

@@ -32,8 +32,12 @@ class Sample(
     val rightZ = cos(yaw)
 }
 
-/** Lücke in der Strecke: Bereich s0..s1 entlang der Strecke, u0..u1 quer (u > 0 = rechts von der Mitte). */
-class Gap(val s0: Float, val s1: Float, val u0: Float, val u1: Float)
+/**
+ * Lücke in der Strecke: Bereich s0..s1 entlang der Strecke, u0..u1 quer (u > 0 = rechts von der Mitte).
+ * full = die Bahn ist komplett unterbrochen: nur dann ist Springen möglich. Sonst muss man auf der
+ * durchgehenden Bahn bleiben.
+ */
+class Gap(val s0: Float, val s1: Float, val u0: Float, val u1: Float, val full: Boolean = false)
 
 /** Zwischen zwei Samples interpolierter Zustand der Strecke (wiederverwendbar, um Speicher zu sparen). */
 class Frame {
@@ -312,11 +316,19 @@ class Track(private val random: Random) {
         val a = floor(s0)
         val b = ceil(s1)
         if (random.nextFloat() < 0.55f) {
-            gaps += Gap(a, b, -BASE_HALF_WIDTH - 2.5f, BASE_HALF_WIDTH + 2.5f) // ganze Breite: springen
+            // Ganze Breite (großzügig, auch wenn die Strecke seitlich versetzt ist): springen ist Pflicht
+            gaps += Gap(a, b, -FULL_GAP_HALF_WIDTH, FULL_GAP_HALF_WIDTH, full = true)
         } else {
-            val w = 1.2f + random.nextFloat() * 0.6f
-            val u0 = -BASE_HALF_WIDTH + random.nextFloat() * (2f * BASE_HALF_WIDTH - w)
-            gaps += Gap(a, b, u0, u0 + w) // Teil-Lücke: ausweichen oder springen
+            // Teil-Lücke: springen geht nicht, man muss auf der durchgehenden Bahn bleiben.
+            // Es bleibt immer mindestens ein Streifen von gut einem Meter Breite frei.
+            val w = 1.2f + random.nextFloat() * 0.4f
+            val h = BASE_HALF_WIDTH
+            val u0 = when (random.nextInt(3)) {
+                0 -> -h + random.nextFloat() * 0.3f // links dicht am Rand: rechts ist frei
+                1 -> h - w - random.nextFloat() * 0.3f // rechts dicht am Rand: links ist frei
+                else -> -w / 2f // in der Mitte: beide Seiten sind frei
+            }
+            gaps += Gap(a, b, u0, u0 + w)
         }
     }
 
@@ -335,6 +347,7 @@ class Track(private val random: Random) {
         private const val NORMAL_EDGE_RATE = 0.08f
         private const val FORK_EDGE_RATE = 0.15f
         private const val CLOSE_LENGTH = 25f
+        private const val FULL_GAP_HALF_WIDTH = 8f
         const val LANE_WIDTH = 2.0f
         const val VOID_WIDTH = 0.8f
         private const val BANK_SLOPE = 0.5f

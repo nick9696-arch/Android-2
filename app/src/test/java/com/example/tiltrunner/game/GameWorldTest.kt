@@ -9,17 +9,31 @@ class GameWorldTest {
 
     private val frame = Frame()
 
-    /** Einfacher Autopilot: hält die Mitte (inklusive Ausgleich der Fliehkraft) und springt vor jeder Lücke. */
+    /**
+     * Einfacher Autopilot: hält die Spur (inklusive Ausgleich der Fliehkraft), weicht Teil-Lücken aus
+     * und springt vor jeder durchgehenden Lücke.
+     */
     private fun pilot(w: GameWorld, jumping: Boolean = true, throttle: Float = -1f): GameInput {
         w.track.frame(w.s, frame)
         val centrifugal = if (frame.banked) 0f else frame.curvature * w.speed * w.speed
+
         // Zielspur: in Abzweigungen die weiterführende Spur, sonst die Mitte
-        val target = w.track.targetU(w.s + 4f)
-        val steer = ((centrifugal + 4f * (target - w.u)) / GameWorld.STEER_ACCEL).coerceIn(-1f, 1f)
-        // Nächste Lücke, die auf der eigenen Spur liegt
-        val next = w.track.gaps
-            .filter { it.s1 > w.s && w.u >= it.u0 - 1f && w.u <= it.u1 + 1f }
+        var target = w.track.targetU(w.s + 4f)
+
+        // Teil-Lücke voraus, die auf der Zielspur liegt: auf der freien Seite vorbeifahren
+        val partial = w.track.gaps
+            .filter { !it.full && it.s1 > w.s && it.s0 - w.s < 14f && target in (it.u0 - 0.9f)..(it.u1 + 0.9f) }
             .minByOrNull { it.s0 }
+        if (partial != null) {
+            val lo = w.track.uMinAt(partial.s0)
+            val hi = w.track.uMaxAt(partial.s0)
+            val leftRoom = partial.u0 - lo
+            val rightRoom = hi - partial.u1
+            target = if (leftRoom >= rightRoom) (lo + partial.u0) / 2f else (partial.u1 + hi) / 2f
+        }
+
+        val steer = ((centrifugal + 4f * (target - w.u)) / GameWorld.STEER_ACCEL).coerceIn(-1f, 1f)
+        val next = w.track.gaps.filter { it.full && it.s1 > w.s }.minByOrNull { it.s0 }
         val jump = jumping && next != null && next.s0 - w.s in 0f..2.5f
         return GameInput(steer = steer, throttle = throttle, jump = jump)
     }
@@ -47,6 +61,31 @@ class GameWorldTest {
         val w = GameWorld(Random(1))
         run(w, 120f) { pilot(w, jumping = false) }
         assertTrue(w.gameOver)
+    }
+
+    @Test
+    fun jumpingIsOnlyPossibleBeforeFullGaps() {
+        // In den ersten 30 m gibt es keine Lücke: der Sprung-Befehl muss wirkungslos bleiben
+        val w = GameWorld(Random(1))
+        repeat(60) { w.update(1f / 60f, GameInput(jump = true)) }
+        assertTrue(w.h <= 0f)
+        // Direkt vor einer durchgehenden Lücke geht der Sprung
+        val full = w.track.gaps.first { it.full }
+        while (full.s0 - w.s > 3f && !w.gameOver) w.update(1f / 60f, pilot(w, jumping = false))
+        w.update(1f / 60f, GameInput(jump = true))
+        assertTrue(w.h > 0f)
+    }
+
+    @Test
+    fun partialGapsAlwaysLeaveAFreeStrip() {
+        for (seed in 1..10) {
+            val t = Track(Random(seed))
+            t.ensure(3000f)
+            for (g in t.gaps.filter { !it.full && it.u1 - it.u0 < 2f && it.u0 > -1.7f && it.u1 < 1.7f }) {
+                val room = maxOf(g.u0 - (-1.6f), 1.6f - g.u1)
+                assertTrue("Seed $seed: nur $room m frei", room >= 0.7f)
+            }
+        }
     }
 
     @Test

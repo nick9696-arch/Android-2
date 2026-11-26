@@ -56,7 +56,7 @@ fun MenuScreen(onStart: () -> Unit) {
                 "Diese Haltung ist \"geradeaus\".\n\n" +
                 "Links/rechts neigen: lenken\n" +
                 "Nach vorn neigen: schneller, zurück: langsamer\n" +
-                "Ruck nach oben: springen\n\n" +
+                "Ruck nach oben: springen (nur vor Lücken, die die ganze Bahn unterbrechen)\n\n" +
                 "In Kurven drückt die Fliehkraft nach außen: Je schneller, desto stärker musst du gegenneigen.",
             color = Color(0xFFCFD8DC),
         )
