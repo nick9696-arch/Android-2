@@ -158,6 +158,6 @@ class MotionInput(context: Context) : SensorEventListener {
         const val JUMP_COOLDOWN_NS = 450_000_000L
         val DEADZONE = Math.toRadians(2.0).toFloat()
         val STEER_FULL = Math.toRadians(25.0).toFloat()
-        val THROTTLE_FULL = Math.toRadians(20.0).toFloat()
+        val THROTTLE_FULL = Math.toRadians(12.0).toFloat()
     }
 }

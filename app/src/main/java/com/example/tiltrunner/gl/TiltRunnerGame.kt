@@ -45,6 +45,7 @@ class TiltRunnerGame(
     private var phaseTime = 0f
     private var highScore = 0
     private var newRecord = false
+    private var rondellBlend = 0f
 
     private var vertexCount = 0
     private val ballFrame = Frame()
@@ -94,7 +95,7 @@ class TiltRunnerGame(
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
 
-        updateCamera()
+        updateCamera(dt)
         gfx.begin(camera.combined, GL20.GL_TRIANGLES)
         vertexCount = 0
         drawTrack()
@@ -144,18 +145,28 @@ class TiltRunnerGame(
 
     // ------------------------------------------------------------------ Kamera
 
-    private fun updateCamera() {
+    private fun updateCamera(dt: Float) {
         val t = world.track
         val u = world.u
-        t.frame(world.s - CAM_BACK, camFrame)
-        t.frame(world.s + CAM_AHEAD, lookFrame)
+
+        // Im Rondell (und kurz davor) näher ran, höher und direkt auf die Kugel schauen,
+        // damit sie in der engen Spirale immer vor dir zu sehen ist.
+        val rondellAhead = world.inRondell || t.sampleAtIndex(t.indexOf(world.s + 14f)).banked
+        rondellBlend += ((if (rondellAhead) 1f else 0f) - rondellBlend) * min(1f, dt * 2.5f)
+        val b = rondellBlend
+        val back = CAM_BACK + (RONDELL_CAM_BACK - CAM_BACK) * b
+        val ahead = CAM_AHEAD + (RONDELL_CAM_AHEAD - CAM_AHEAD) * b
+        val height = CAM_HEIGHT + (RONDELL_CAM_HEIGHT - CAM_HEIGHT) * b
+
+        t.frame(world.s - back, camFrame)
+        t.frame(world.s + ahead, lookFrame)
 
         val camU = u * 0.6f
         val camX = camFrame.x + camFrame.rightX * camU
         val camZ = camFrame.z + camFrame.rightZ * camU
-        val camY = camFrame.y - camFrame.bank * camU + CAM_HEIGHT + max(world.h, -1f) * 0.3f
+        val camY = camFrame.y - camFrame.bank * camU + height + max(world.h, -1f) * 0.3f
 
-        val lookU = u * 0.3f
+        val lookU = u * (0.3f + 0.7f * b)
         val lx = lookFrame.x + lookFrame.rightX * lookU
         val lz = lookFrame.z + lookFrame.rightZ * lookU
         val ly = lookFrame.y - lookFrame.bank * lookU + 0.5f
@@ -259,11 +270,12 @@ class TiltRunnerGame(
 
     private fun drawSlab(t: Track, a: Sample, b: Sample, dist: Float) {
         val sMid = (a.s + b.s) / 2f
-        val hw = (a.halfWidth + b.halfWidth) / 2f
+        val midMin = (a.uMin + b.uMin) / 2f
+        val midMax = (a.uMax + b.uMax) / 2f
 
         // Bodenstücke dieses Abschnitts: Breite minus aktive Lücken
         var n = 1
-        lo[0] = -hw; hi[0] = hw
+        lo[0] = midMin; hi[0] = midMax
         for (g in t.gaps) {
             if (!(g.s0 < sMid && g.s1 > sMid)) continue
             var m = 0
@@ -271,8 +283,8 @@ class TiltRunnerGame(
                 if (g.u1 <= lo[j] || g.u0 >= hi[j]) {
                     keepLo[m] = lo[j]; keepHi[m] = hi[j]; m++
                 } else {
-                    if (g.u0 > lo[j]) { keepLo[m] = lo[j]; keepHi[m] = g.u0; m++ }
-                    if (g.u1 < hi[j]) { keepLo[m] = g.u1; keepHi[m] = hi[j]; m++ }
+                    if (g.u0 - lo[j] > MIN_PIECE && m < keepLo.size) { keepLo[m] = lo[j]; keepHi[m] = g.u0; m++ }
+                    if (hi[j] - g.u1 > MIN_PIECE && m < keepLo.size) { keepLo[m] = g.u1; keepHi[m] = hi[j]; m++ }
                 }
             }
             n = min(m, lo.size)
@@ -294,12 +306,12 @@ class TiltRunnerGame(
         val rimR = fogged(dist, 0.92f, SKY_R); val rimG = fogged(dist, 0.96f, SKY_G); val rimB = fogged(dist, 0.95f, SKY_B)
 
         for (j in 0 until n) {
-            val leftOuter = lo[j] <= -hw + 0.001f
-            val rightOuter = hi[j] >= hw - 0.001f
-            val uLa = if (leftOuter) -a.halfWidth else lo[j]
-            val uLb = if (leftOuter) -b.halfWidth else lo[j]
-            val uRa = if (rightOuter) a.halfWidth else hi[j]
-            val uRb = if (rightOuter) b.halfWidth else hi[j]
+            val leftOuter = lo[j] <= midMin + 0.001f
+            val rightOuter = hi[j] >= midMax - 0.001f
+            val uLa = if (leftOuter) a.uMin else lo[j]
+            val uLb = if (leftOuter) b.uMin else lo[j]
+            val uRa = if (rightOuter) a.uMax else hi[j]
+            val uRb = if (rightOuter) b.uMax else hi[j]
 
             flat(a, uLa, uRa, b, uLb, uRb, 0f, topR, topG, topB)
             strip(a, uLa, b, uLb, 0f, -THICKNESS, sideR, sideG, sideB)
@@ -457,6 +469,9 @@ class TiltRunnerGame(
         const val CAM_BACK = 7f
         const val CAM_AHEAD = 10f
         const val CAM_HEIGHT = 3.4f
+        const val RONDELL_CAM_BACK = 4.5f
+        const val RONDELL_CAM_AHEAD = 0.5f
+        const val RONDELL_CAM_HEIGHT = 6.5f
         const val VIEW_BEHIND = 15f
         const val VIEW_AHEAD = 130f
         const val NEAR_DETAIL = 45f
@@ -464,6 +479,7 @@ class TiltRunnerGame(
         const val FOG_END = 130f
 
         const val THICKNESS = 0.6f
+        const val MIN_PIECE = 0.02f
         const val RIM_W = 0.14f
         const val RIM_H = 0.22f
         const val BALL_R = GameWorld.BALL_RADIUS

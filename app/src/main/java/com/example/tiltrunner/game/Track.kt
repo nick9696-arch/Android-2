@@ -1,6 +1,5 @@
 package com.example.tiltrunner.game
 
-import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
@@ -23,7 +22,8 @@ class Sample(
     val yaw: Float,
     val curvature: Float,
     val bank: Float,
-    val halfWidth: Float,
+    val uMin: Float,
+    val uMax: Float,
     val banked: Boolean,
 ) {
     val dirX = cos(yaw)
@@ -41,10 +41,14 @@ class Frame {
     var dirX = 1f; var dirZ = 0f
     var rightX = 0f; var rightZ = 1f
     var bank = 0f
-    var halfWidth = 0f
+    var uMin = 0f
+    var uMax = 0f
     var curvature = 0f
     var banked = false
 }
+
+/** Eine Abzweigung: von s0 bis s1; nur die Spur mit dem seitlichen Abstand survivorU führt weiter. */
+class Fork(val s0: Float, val s1: Float, val survivorU: Float)
 
 /**
  * Endlose, zufällig erzeugte Strecke aus Geraden, Kurven und Rondellen.
@@ -55,6 +59,7 @@ class Track(private val random: Random) {
     private val samples = ArrayList<Sample>()
     private var baseIdx = 0
     val gaps = ArrayList<Gap>()
+    val forks = ArrayList<Fork>()
 
     // Zustand des Generators
     private var gx = 0f
@@ -65,18 +70,28 @@ class Track(private val random: Random) {
     private var curv = 0f
     private var slope = 0f
     private var bank = 0f
-    private var width = BASE_HALF_WIDTH
+    private var edgeL = -BASE_HALF_WIDTH
+    private var edgeR = BASE_HALF_WIDTH
 
     private var pieceLeft = 0f
     private var pieceCurv = 0f
     private var pieceSlope = 0f
     private var pieceBanked = false
-    private var pieceWidth = BASE_HALF_WIDTH
+    private var pieceEdgeL = -BASE_HALF_WIDTH
+    private var pieceEdgeR = BASE_HALF_WIDTH
+    private var pieceEdgeRate = NORMAL_EDGE_RATE
     private var pieceCount = 0
     private var afterRondell = false
 
+    // Abzweigung: wird in drei aufeinanderfolgenden Stücken erzeugt (öffnen, Spuren, schließen)
+    private var forkStage = 0
+    private var forkLanes = 2
+    private var forkSurvivor = 0
+    private var forkStartS = 0f
+    private var lastForkPiece = -100
+
     init {
-        samples += Sample(0f, 0f, 0f, 0f, 0f, 0f, 0f, BASE_HALF_WIDTH, false)
+        samples += Sample(0f, 0f, 0f, 0f, 0f, 0f, 0f, -BASE_HALF_WIDTH, BASE_HALF_WIDTH, false)
         ensure(LOOKAHEAD)
     }
 
@@ -103,23 +118,42 @@ class Track(private val random: Random) {
         out.dirX = dx; out.dirZ = dz
         out.rightX = -dz; out.rightZ = dx
         out.bank = a.bank + (b.bank - a.bank) * t
-        out.halfWidth = a.halfWidth + (b.halfWidth - a.halfWidth) * t
+        out.uMin = a.uMin + (b.uMin - a.uMin) * t
+        out.uMax = a.uMax + (b.uMax - a.uMax) * t
         out.curvature = a.curvature + (b.curvature - a.curvature) * t
         out.banked = a.banked
     }
 
-    fun halfWidthAt(s: Float): Float {
+    fun uMinAt(s: Float): Float {
         val f = s / DS
         val i0 = floor(f).toInt()
         val t = f - i0
         val a = sampleAtIndex(i0)
         val b = sampleAtIndex(i0 + 1)
-        return a.halfWidth + (b.halfWidth - a.halfWidth) * t
+        return a.uMin + (b.uMin - a.uMin) * t
+    }
+
+    fun uMaxAt(s: Float): Float {
+        val f = s / DS
+        val i0 = floor(f).toInt()
+        val t = f - i0
+        val a = sampleAtIndex(i0)
+        val b = sampleAtIndex(i0 + 1)
+        return a.uMax + (b.uMax - a.uMax) * t
+    }
+
+    /**
+     * Seitliche Position, auf der man sicher weiterkommt: in einer Abzweigung die weiterführende Spur,
+     * sonst die Mitte des begehbaren Bereichs.
+     */
+    fun targetU(s: Float): Float {
+        for (f in forks) if (s >= f.s0 && s <= f.s1) return f.survivorU
+        return (uMinAt(s) + uMaxAt(s)) / 2f
     }
 
     /** true, wenn an der Stelle (s, u) Boden ist (innerhalb der Breite und nicht in einer Lücke). */
     fun isSolid(s: Float, u: Float): Boolean {
-        if (abs(u) > halfWidthAt(s)) return false
+        if (u < uMinAt(s) || u > uMaxAt(s)) return false
         for (g in gaps) {
             if (s >= g.s0 && s <= g.s1 && u >= g.u0 && u <= g.u1) return false
         }
@@ -141,6 +175,7 @@ class Track(private val random: Random) {
             baseIdx += drop
         }
         gaps.removeAll { it.s1 < s - KEEP_BEHIND }
+        forks.removeAll { it.s1 < s - KEEP_BEHIND }
     }
 
     // ------------------------------------------------------------ Erzeugung
@@ -150,7 +185,8 @@ class Track(private val random: Random) {
         slope += clampDelta(pieceSlope - slope, SLOPE_RATE * DS)
         val bankTarget = if (pieceBanked) (if (pieceCurv > 0f) BANK_SLOPE else -BANK_SLOPE) else 0f
         bank += clampDelta(bankTarget - bank, BANK_RATE * DS)
-        width += clampDelta(pieceWidth - width, WIDTH_RATE * DS)
+        edgeL += clampDelta(pieceEdgeL - edgeL, pieceEdgeRate * DS)
+        edgeR += clampDelta(pieceEdgeR - edgeR, pieceEdgeRate * DS)
 
         gyaw += curv * DS
         gx += cos(gyaw) * DS
@@ -158,17 +194,21 @@ class Track(private val random: Random) {
         gy += slope * DS
         gs += DS
         pieceLeft -= DS
-        samples += Sample(gs, gx, gy, gz, gyaw, curv, bank, width, pieceBanked)
+        samples += Sample(gs, gx, gy, gz, gyaw, curv, bank, edgeL, edgeR, pieceBanked)
     }
 
     private fun newPiece() {
         pieceCount++
         val d = min(gs / 4000f, 1f)
+        if (forkStage > 0) {
+            nextForkStage(d)
+            return
+        }
         when {
-            pieceCount == 1 -> startPiece(45f, 0f, 0f, false, BASE_HALF_WIDTH, gapChance = 0f, d = d)
+            pieceCount == 1 -> normalPiece(45f, 0f, 0f, 0f, d)
             afterRondell -> {
                 afterRondell = false
-                startPiece(25f, 0f, 0f, false, BASE_HALF_WIDTH, gapChance = 0f, d = d)
+                normalPiece(25f, 0f, 0f, 0f, d)
             }
             pieceCount >= 4 && random.nextFloat() < 0.22f -> {
                 // Rondell: breit, schräg, spiralförmig bergab. Hier gibt es Pause zum Durchatmen.
@@ -177,31 +217,84 @@ class Track(private val random: Random) {
                 val turns = 1.25f + random.nextFloat() * 0.5f
                 val length = 2f * Math.PI.toFloat() * radius * turns
                 afterRondell = true
-                startPiece(length, sign / radius, -0.10f, true, RONDELL_HALF_WIDTH, gapChance = 0f, d = d)
+                startPiece(length, sign / radius, -0.10f, true, -RONDELL_HALF_WIDTH, RONDELL_HALF_WIDTH, 0f, d, 0.1f)
             }
+            pieceCount >= 5 && pieceCount - lastForkPiece >= 3 && random.nextFloat() < 0.2f -> beginFork(d)
             random.nextFloat() < 0.4f -> {
                 val length = 30f + random.nextFloat() * 40f
-                startPiece(length, 0f, -0.07f + random.nextFloat() * 0.12f, false, BASE_HALF_WIDTH, gapChance = 1f, d = d)
+                normalPiece(length, 0f, -0.07f + random.nextFloat() * 0.12f, 1f, d)
             }
             else -> {
                 val sign = if (random.nextBoolean()) 1f else -1f
                 val radius = max(10f, 18f + random.nextFloat() * 14f - d * 8f)
                 val angle = Math.toRadians((50 + random.nextInt(70)).toDouble()).toFloat()
-                startPiece(angle * radius, sign / radius, 0f, false, BASE_HALF_WIDTH, gapChance = 0.5f, d = d)
+                normalPiece(angle * radius, sign / radius, 0f, 0.5f, d)
             }
         }
     }
 
+    private fun normalPiece(length: Float, curvature: Float, slopeTarget: Float, gapChance: Float, d: Float) =
+        startPiece(length, curvature, slopeTarget, false, -BASE_HALF_WIDTH, BASE_HALF_WIDTH, gapChance, d, NORMAL_EDGE_RATE)
+
     private fun startPiece(
         length: Float, curvature: Float, slopeTarget: Float, banked: Boolean,
-        halfWidth: Float, gapChance: Float, d: Float,
+        edgeLeft: Float, edgeRight: Float, gapChance: Float, d: Float, edgeRate: Float,
     ) {
         pieceLeft = length
         pieceCurv = curvature
         pieceSlope = slopeTarget
         pieceBanked = banked
-        pieceWidth = halfWidth
+        pieceEdgeL = edgeLeft
+        pieceEdgeR = edgeRight
+        pieceEdgeRate = edgeRate
         if (gapChance > 0f) placeGaps(gs, gs + length, gapChance, d)
+    }
+
+    // ------------------------------------------------------------ Abzweigung
+
+    private fun laneCenter(lane: Int, lanes: Int): Float =
+        (lane - (lanes - 1) / 2f) * (LANE_WIDTH + VOID_WIDTH)
+
+    private fun forkHalfWidth(lanes: Int): Float = (lanes * LANE_WIDTH + (lanes - 1) * VOID_WIDTH) / 2f
+
+    private fun beginFork(d: Float) {
+        forkLanes = if (gs > 600f && random.nextBoolean()) 3 else 2
+        forkSurvivor = random.nextInt(forkLanes)
+        forkStartS = gs
+        forkStage = 1
+        val h = forkHalfWidth(forkLanes)
+        // 1. Die Strecke wird breiter
+        startPiece(20f, 0f, 0f, false, -h, h, 0f, d, FORK_EDGE_RATE)
+    }
+
+    private fun nextForkStage(d: Float) {
+        val h = forkHalfWidth(forkLanes)
+        if (forkStage == 1) {
+            forkStage = 2
+            // 2. Mehrere Spuren mit Lücken dazwischen. Nur eine Spur führt weiter, die anderen enden im Leeren.
+            val length = 45f
+            startPiece(length, 0f, 0f, false, -h, h, 0f, d, FORK_EDGE_RATE)
+            val cut = gs + 28f
+            for (i in 0 until forkLanes - 1) {
+                val c = laneCenter(i, forkLanes)
+                gaps += Gap(gs, gs + length, c + LANE_WIDTH / 2f, c + LANE_WIDTH / 2f + VOID_WIDTH)
+            }
+            for (i in 0 until forkLanes) {
+                if (i == forkSurvivor) continue
+                val c = laneCenter(i, forkLanes)
+                val u0 = if (i == 0) -h - 2f else c - LANE_WIDTH / 2f
+                val u1 = if (i == forkLanes - 1) h + 2f else c + LANE_WIDTH / 2f
+                gaps += Gap(cut, gs + length + CLOSE_LENGTH, u0, u1) // bis zum Ende der Abzweigung
+            }
+        } else {
+            forkStage = 0
+            lastForkPiece = pieceCount // danach mindestens zwei normale Stücke, damit sich die Strecke wieder zentrieren kann
+            // 3. Die Strecke verengt sich auf die überlebende Spur
+            val c = laneCenter(forkSurvivor, forkLanes)
+            val length = CLOSE_LENGTH
+            startPiece(length, 0f, 0f, false, c - BASE_HALF_WIDTH, c + BASE_HALF_WIDTH, 0f, d, FORK_EDGE_RATE)
+            forks += Fork(forkStartS, gs + length, c)
+        }
     }
 
     private fun placeGaps(from: Float, to: Float, chance: Float, d: Float) {
@@ -239,7 +332,11 @@ class Track(private val random: Random) {
         private const val CURV_RATE = 0.02f
         private const val SLOPE_RATE = 0.02f
         private const val BANK_RATE = 0.05f
-        private const val WIDTH_RATE = 0.1f
+        private const val NORMAL_EDGE_RATE = 0.08f
+        private const val FORK_EDGE_RATE = 0.15f
+        private const val CLOSE_LENGTH = 25f
+        const val LANE_WIDTH = 2.0f
+        const val VOID_WIDTH = 0.8f
         private const val BANK_SLOPE = 0.5f
     }
 }

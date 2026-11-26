@@ -50,7 +50,7 @@ class GameWorld(random: Random = Random.Default) {
         } else {
             (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (throttle + 1f) / 2f) * (1f + difficulty)
         }
-        speed += (target - speed) * min(1f, d * 3f)
+        speed += (target - speed) * min(1f, d * SPEED_RESPONSE)
         s += speed * d
         // Schneller fahren bringt mehr Punkte
         points += speed * speed * d / 10f
@@ -92,7 +92,8 @@ class GameWorld(random: Random = Random.Default) {
 
     companion object {
         const val MIN_SPEED = 5f
-        const val MAX_SPEED = 17f
+        const val MAX_SPEED = 21f
+        const val SPEED_RESPONSE = 6f
         const val RONDELL_SPEED = 9f
         const val STEER_ACCEL = 10f
         const val LATERAL_DAMPING = 2.5f

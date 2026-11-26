@@ -13,8 +13,13 @@ class GameWorldTest {
     private fun pilot(w: GameWorld, jumping: Boolean = true, throttle: Float = -1f): GameInput {
         w.track.frame(w.s, frame)
         val centrifugal = if (frame.banked) 0f else frame.curvature * w.speed * w.speed
-        val steer = ((centrifugal - 4f * w.u) / GameWorld.STEER_ACCEL).coerceIn(-1f, 1f)
-        val next = w.track.gaps.firstOrNull { it.s1 > w.s }
+        // Zielspur: in Abzweigungen die weiterführende Spur, sonst die Mitte
+        val target = w.track.targetU(w.s + 4f)
+        val steer = ((centrifugal + 4f * (target - w.u)) / GameWorld.STEER_ACCEL).coerceIn(-1f, 1f)
+        // Nächste Lücke, die auf der eigenen Spur liegt
+        val next = w.track.gaps
+            .filter { it.s1 > w.s && w.u >= it.u0 - 1f && w.u <= it.u1 + 1f }
+            .minByOrNull { it.s0 }
         val jump = jumping && next != null && next.s0 - w.s in 0f..2.5f
         return GameInput(steer = steer, throttle = throttle, jump = jump)
     }
@@ -78,6 +83,23 @@ class GameWorldTest {
             val dist = kotlin.math.hypot(b.x - a.x, b.z - a.z)
             assertTrue("Sprung bei $i: $dist", dist in 0.45f..0.55f)
         }
+    }
+
+    @Test
+    fun forksExistAndDeadLanesEnd() {
+        var forks = 0
+        for (seed in 1..10) {
+            val t = Track(Random(seed))
+            t.ensure(2500f)
+            forks += t.forks.size
+            for (f in t.forks) {
+                // Auf der weiterführenden Spur ist am Ende der Abzweigung Boden, daneben nicht
+                assertTrue(t.isSolid(f.s1 - 5f, f.survivorU))
+                val dead = if (f.survivorU > 0.1f) f.survivorU - 2.8f else f.survivorU + 2.8f
+                assertFalse("Seed $seed: tote Spur hat Boden", t.isSolid(f.s1 - 5f, dead))
+            }
+        }
+        assertTrue("Keine Abzweigung gefunden", forks > 0)
     }
 
     @Test
