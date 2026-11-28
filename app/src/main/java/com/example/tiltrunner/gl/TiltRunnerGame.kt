@@ -46,6 +46,8 @@ class TiltRunnerGame(
     private var highScore = 0
     private var newRecord = false
     private var rondellBlend = 0f
+    private var camLevel = 0f
+    private var lowerPass = false
 
     private var vertexCount = 0
     private val ballFrame = Frame()
@@ -117,6 +119,7 @@ class TiltRunnerGame(
             Phase.COUNTDOWN -> if (phaseTime >= COUNTDOWN_SECONDS) {
                 // Erst jetzt kalibrieren: Die Haltung am Ende des Countdowns gilt als "geradeaus"
                 world = GameWorld()
+                camLevel = 0f
                 motion.calibrate()
                 newRecord = false
                 setPhase(Phase.PLAYING)
@@ -164,12 +167,16 @@ class TiltRunnerGame(
         val camU = u * 0.6f
         val camX = camFrame.x + camFrame.rightX * camU
         val camZ = camFrame.z + camFrame.rightZ * camU
-        val camY = camFrame.y - camFrame.bank * camU + height + max(world.h, -1f) * 0.3f
+        // Ebene (obere/untere Bahn) weich nachführen. Beim freien Fall folgt die Kamera der Kugel nach unten.
+        val levelTarget = if (world.grounded) world.groundLevel else min(world.groundLevel, world.y)
+        camLevel += (levelTarget - camLevel) * min(1f, dt * 4f)
+        val hop = if (world.grounded) 0f else (world.y - world.groundLevel).coerceIn(-1.5f, 3f)
+        val camY = camFrame.y - camFrame.bank * camU + height + camLevel + hop * 0.3f
 
         val lookU = u * (0.3f + 0.7f * b)
         val lx = lookFrame.x + lookFrame.rightX * lookU
         val lz = lookFrame.z + lookFrame.rightZ * lookU
-        val ly = lookFrame.y - lookFrame.bank * lookU + 0.5f
+        val ly = lookFrame.y - lookFrame.bank * lookU + 0.5f + camLevel
 
         camera.position.set(camX, camY, camZ)
         camera.up.set(0f, 1f, 0f)
@@ -213,7 +220,8 @@ class TiltRunnerGame(
 
     // Punkt auf der Strecke: seitlicher Abstand u von der Mitte des Samples, dy über der Oberfläche
     private fun px(sm: Sample, u: Float) = sm.x + sm.rightX * u
-    private fun py(sm: Sample, u: Float, dy: Float) = sm.y - sm.bank * u + dy
+    private fun py(sm: Sample, u: Float, dy: Float) =
+        sm.y - sm.bank * u + dy - (if (lowerPass) world.track.depthAt(sm.s) else 0f)
     private fun pz(sm: Sample, u: Float) = sm.z + sm.rightZ * u
 
     /** Waagerechte Fläche zwischen zwei Samples, von u1 bis u2 (je Sample), in der Höhe dy. */
@@ -257,9 +265,25 @@ class TiltRunnerGame(
     private fun drawTrack() {
         val t = world.track
         val sBall = world.s
-        var i = max(t.indexOf(sBall - VIEW_BEHIND), t.firstIndex)
+        val iFirst = max(t.indexOf(sBall - VIEW_BEHIND), t.firstIndex)
         val iEnd = t.indexOf(sBall + VIEW_AHEAD)
-        while (i < iEnd) {
+
+        lowerPass = false
+        drawLayer(t, iFirst, iEnd, sBall)
+
+        // Untere Bahnen der Doppeldecker-Abschnitte
+        lowerPass = true
+        for (deck in t.decks) {
+            val from = max(iFirst, t.indexOf(deck.s0))
+            val to = min(iEnd, t.indexOf(deck.s1) + 1)
+            if (to > from) drawLayer(t, from, to, sBall)
+        }
+        lowerPass = false
+    }
+
+    private fun drawLayer(t: Track, iFrom: Int, iTo: Int, sBall: Float) {
+        var i = iFrom
+        while (i < iTo) {
             val dist = i * Track.DS - sBall
             // In der Ferne gröber zeichnen (nur auf geraden Indizes, damit Lücken-Grenzen passen)
             val k = if (dist > NEAR_DETAIL && i % 2 == 0) 2 else 1
@@ -269,14 +293,20 @@ class TiltRunnerGame(
     }
 
     private fun drawSlab(t: Track, a: Sample, b: Sample, dist: Float) {
+        val lower = lowerPass
         val sMid = (a.s + b.s) / 2f
-        val midMin = (a.uMin + b.uMin) / 2f
-        val midMax = (a.uMax + b.uMax) / 2f
+        if (lower && t.depthAt(sMid) <= 0f) return
+        val aMin = if (lower) t.lowerMinAt(a.s) else a.uMin
+        val aMax = if (lower) t.lowerMaxAt(a.s) else a.uMax
+        val bMin = if (lower) t.lowerMinAt(b.s) else b.uMin
+        val bMax = if (lower) t.lowerMaxAt(b.s) else b.uMax
+        val midMin = (aMin + bMin) / 2f
+        val midMax = (aMax + bMax) / 2f
 
         // Bodenstücke dieses Abschnitts: Breite minus aktive Lücken
         var n = 1
         lo[0] = midMin; hi[0] = midMax
-        for (g in t.gaps) {
+        for (g in if (lower) t.lowGaps else t.gaps) {
             if (!(g.s0 < sMid && g.s1 > sMid)) continue
             var m = 0
             for (j in 0 until n) {
@@ -295,7 +325,9 @@ class TiltRunnerGame(
         // Farben: abwechselnde Streifen vermitteln Tempo, das Rondell ist warm gefärbt
         val band = floor(sMid / 3f).toInt() and 1
         val baseR: Float; val baseG: Float; val baseB: Float
-        if (a.banked) {
+        if (lower) {
+            if (band == 0) { baseR = 0.50f; baseG = 0.42f; baseB = 0.85f } else { baseR = 0.43f; baseG = 0.36f; baseB = 0.76f }
+        } else if (a.banked) {
             if (band == 0) { baseR = 0.93f; baseG = 0.62f; baseB = 0.30f } else { baseR = 0.86f; baseG = 0.52f; baseB = 0.24f }
         } else {
             if (band == 0) { baseR = 0.25f; baseG = 0.65f; baseB = 0.59f } else { baseR = 0.21f; baseG = 0.56f; baseB = 0.52f }
@@ -308,10 +340,10 @@ class TiltRunnerGame(
         for (j in 0 until n) {
             val leftOuter = lo[j] <= midMin + 0.001f
             val rightOuter = hi[j] >= midMax - 0.001f
-            val uLa = if (leftOuter) a.uMin else lo[j]
-            val uLb = if (leftOuter) b.uMin else lo[j]
-            val uRa = if (rightOuter) a.uMax else hi[j]
-            val uRb = if (rightOuter) b.uMax else hi[j]
+            val uLa = if (leftOuter) aMin else lo[j]
+            val uLb = if (leftOuter) bMin else lo[j]
+            val uRa = if (rightOuter) aMax else hi[j]
+            val uRb = if (rightOuter) bMax else hi[j]
 
             flat(a, uLa, uRa, b, uLb, uRb, 0f, topR, topG, topB)
             strip(a, uLa, b, uLb, 0f, -THICKNESS, sideR, sideG, sideB)
@@ -331,21 +363,24 @@ class TiltRunnerGame(
 
             // Stirnflächen an Lückenrändern
             val mid = (lo[j] + hi[j]) / 2f
-            if (!t.isSolid(a.s - 0.25f, mid)) cap(a, uLa, uRa, 0f, -THICKNESS, capR, capG, capB)
-            if (!t.isSolid(b.s + 0.25f, mid)) cap(b, uLb, uRb, 0f, -THICKNESS, capR, capG, capB)
+            val solidBefore = if (lower) t.lowerSolid(a.s - 0.25f, mid) else t.isSolid(a.s - 0.25f, mid)
+            val solidAfter = if (lower) t.lowerSolid(b.s + 0.25f, mid) else t.isSolid(b.s + 0.25f, mid)
+            if (!solidBefore) cap(a, uLa, uRa, 0f, -THICKNESS, capR, capG, capB)
+            if (!solidAfter) cap(b, uLb, uRb, 0f, -THICKNESS, capR, capG, capB)
         }
     }
 
     // ------------------------------------------------------------------ Zeichnen: Kugel
 
     private fun drawShadow() {
-        if (world.falling || !world.track.isSolid(world.s, world.u)) return
+        val support = world.supportBelow
+        if (support.isNaN()) return
         world.track.frame(world.s, ballFrame)
         val bf = ballFrame
         val cx = bf.x + bf.rightX * world.u
         val cz = bf.z + bf.rightZ * world.u
-        val cy = bf.y - bf.bank * world.u + 0.03f
-        val radius = BALL_R * (1f - min(world.h, 2f) * 0.2f)
+        val cy = bf.y - bf.bank * world.u + support + 0.03f
+        val radius = BALL_R * (1f - min(max(world.y - support, 0f), 2f) * 0.2f)
         val segs = 14
         ensureRoom(segs * 3)
         for (i in 0 until segs) {
@@ -362,8 +397,8 @@ class TiltRunnerGame(
         world.track.frame(world.s, bf)
         val cx = bf.x + bf.rightX * world.u
         val cz = bf.z + bf.rightZ * world.u
-        val cy = bf.y - bf.bank * world.u + world.h + BALL_R
-        val shrink = if (world.falling) (1f + world.h / 8f).coerceIn(0.3f, 1f) else 1f
+        val cy = bf.y - bf.bank * world.u + world.y + BALL_R
+        val shrink = 1f - 0.7f * world.deathProgress
         val r = BALL_R * shrink
 
         val phi = world.rollAngle

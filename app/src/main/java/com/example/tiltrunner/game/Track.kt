@@ -51,6 +51,13 @@ class Frame {
     var banked = false
 }
 
+/**
+ * Doppeldecker-Abschnitt: Unter der oberen Strecke liegt von s0 bis s1 eine zweite Bahn, die etwas breiter ist.
+ * Wer von der oberen Bahn fällt (über den Rand oder durch eine Lücke), landet darauf. Zum Ende hin
+ * (ramp) steigt sie an und trifft wieder auf die obere Bahn.
+ */
+class Deck(val s0: Float, val s1: Float, val depth: Float, val ramp: Float, val overhang: Float)
+
 /** Eine Abzweigung: von s0 bis s1; nur die Spur mit dem seitlichen Abstand survivorU führt weiter. */
 class Fork(val s0: Float, val s1: Float, val survivorU: Float)
 
@@ -64,6 +71,8 @@ class Track(private val random: Random) {
     private var baseIdx = 0
     val gaps = ArrayList<Gap>()
     val forks = ArrayList<Fork>()
+    val decks = ArrayList<Deck>()
+    val lowGaps = ArrayList<Gap>() // Lücken in der unteren Bahn
 
     // Zustand des Generators
     private var gx = 0f
@@ -93,6 +102,7 @@ class Track(private val random: Random) {
     private var forkSurvivor = 0
     private var forkStartS = 0f
     private var lastForkPiece = -100
+    private var lastDeckPiece = -100
 
     init {
         samples += Sample(0f, 0f, 0f, 0f, 0f, 0f, 0f, -BASE_HALF_WIDTH, BASE_HALF_WIDTH, false)
@@ -155,6 +165,38 @@ class Track(private val random: Random) {
         return (uMinAt(s) + uMaxAt(s)) / 2f
     }
 
+    // ------------------------------------------------------------ Untere Bahn
+
+    private fun deckAt(s: Float): Deck? {
+        for (d in decks) if (s >= d.s0 && s <= d.s1) return d
+        return null
+    }
+
+    /** Wie tief die untere Bahn unter der oberen liegt (0 = keine untere Bahn). */
+    fun depthAt(s: Float): Float {
+        val d = deckAt(s) ?: return 0f
+        return if (s <= d.s1 - d.ramp) d.depth else d.depth * ((d.s1 - s) / d.ramp)
+    }
+
+    private fun overhangAt(s: Float): Float {
+        val d = deckAt(s) ?: return 0f
+        return d.overhang * depthAt(s) / d.depth
+    }
+
+    fun lowerMinAt(s: Float): Float = uMinAt(s) - overhangAt(s)
+
+    fun lowerMaxAt(s: Float): Float = uMaxAt(s) + overhangAt(s)
+
+    /** true, wenn an der Stelle (s, u) die untere Bahn Boden hat. */
+    fun lowerSolid(s: Float, u: Float): Boolean {
+        if (deckAt(s) == null) return false
+        if (u < lowerMinAt(s) || u > lowerMaxAt(s)) return false
+        for (g in lowGaps) {
+            if (s >= g.s0 && s <= g.s1 && u >= g.u0 && u <= g.u1) return false
+        }
+        return true
+    }
+
     /** true, wenn an der Stelle (s, u) Boden ist (innerhalb der Breite und nicht in einer Lücke). */
     fun isSolid(s: Float, u: Float): Boolean {
         if (u < uMinAt(s) || u > uMaxAt(s)) return false
@@ -180,6 +222,8 @@ class Track(private val random: Random) {
         }
         gaps.removeAll { it.s1 < s - KEEP_BEHIND }
         forks.removeAll { it.s1 < s - KEEP_BEHIND }
+        decks.removeAll { it.s1 < s - KEEP_BEHIND }
+        lowGaps.removeAll { it.s1 < s - KEEP_BEHIND }
     }
 
     // ------------------------------------------------------------ Erzeugung
@@ -224,6 +268,8 @@ class Track(private val random: Random) {
                 startPiece(length, sign / radius, -0.10f, true, -RONDELL_HALF_WIDTH, RONDELL_HALF_WIDTH, 0f, d, 0.1f)
             }
             pieceCount >= 5 && pieceCount - lastForkPiece >= 3 && random.nextFloat() < 0.2f -> beginFork(d)
+            pieceCount >= 6 && pieceCount - lastForkPiece >= 3 && pieceCount - lastDeckPiece >= 4 &&
+                random.nextFloat() < 0.2f -> deckPiece(d)
             random.nextFloat() < 0.4f -> {
                 val length = 30f + random.nextFloat() * 40f
                 normalPiece(length, 0f, -0.07f + random.nextFloat() * 0.12f, 1f, d)
@@ -252,6 +298,27 @@ class Track(private val random: Random) {
         pieceEdgeR = edgeRight
         pieceEdgeRate = edgeRate
         if (gapChance > 0f) placeGaps(gs, gs + length, gapChance, d)
+    }
+
+    // ------------------------------------------------------------ Doppeldecker
+
+    private fun deckPiece(d: Float) {
+        lastDeckPiece = pieceCount
+        val s0 = gs
+        val length = DECK_LENGTH
+        // Obere Bahn: gerade, mit normalen Lücken. Fällt man hinein, landet man auf der unteren Bahn.
+        startPiece(length, 0f, 0f, false, -BASE_HALF_WIDTH, BASE_HALF_WIDTH, 0.7f, d, NORMAL_EDGE_RATE)
+        decks += Deck(s0, s0 + length, DECK_DEPTH, DECK_RAMP, DECK_OVERHANG)
+        // Untere Bahn: ein bis zwei durchgehende Lücken, nicht im ansteigenden Endstück
+        var cursor = s0 + 16f
+        val last = s0 + length - DECK_RAMP - 8f
+        while (cursor < last) {
+            val len = 2.2f + random.nextFloat() * 0.8f
+            if (random.nextFloat() < 0.8f && cursor + len < last) {
+                lowGaps += Gap(floor(cursor), ceil(cursor + len), -FULL_GAP_HALF_WIDTH, FULL_GAP_HALF_WIDTH, full = true)
+            }
+            cursor += len + 18f + random.nextFloat() * 8f
+        }
     }
 
     // ------------------------------------------------------------ Abzweigung
@@ -347,6 +414,10 @@ class Track(private val random: Random) {
         private const val NORMAL_EDGE_RATE = 0.08f
         private const val FORK_EDGE_RATE = 0.15f
         private const val CLOSE_LENGTH = 25f
+        private const val DECK_LENGTH = 80f
+        private const val DECK_DEPTH = 4f
+        private const val DECK_RAMP = 15f
+        private const val DECK_OVERHANG = 1.5f
         private const val FULL_GAP_HALF_WIDTH = 8f
         const val LANE_WIDTH = 2.0f
         const val VOID_WIDTH = 0.8f

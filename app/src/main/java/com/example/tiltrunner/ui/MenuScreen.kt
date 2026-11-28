@@ -57,7 +57,8 @@ fun MenuScreen(onStart: () -> Unit) {
                 "Links/rechts neigen: lenken\n" +
                 "Nach vorn neigen: schneller, zurück: langsamer\n" +
                 "Ruck nach oben: springen (nur vor Lücken, die die ganze Bahn unterbrechen)\n\n" +
-                "In Kurven drückt die Fliehkraft nach außen: Je schneller, desto stärker musst du gegenneigen.",
+                "In Kurven drückt die Fliehkraft nach außen: Je schneller, desto stärker musst du gegenneigen.\n\n" +
+                "Manchmal liegt unter dir eine zweite, violette Bahn: Rolle über den Rand oder fall durch eine Lücke, um dort zu landen.",
             color = Color(0xFFCFD8DC),
         )
         Text("Sprung-Empfindlichkeit (links = empfindlicher)", color = Color(0xFFB0BEC5))

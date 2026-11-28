@@ -33,7 +33,8 @@ class GameWorldTest {
         }
 
         val steer = ((centrifugal + 4f * (target - w.u)) / GameWorld.STEER_ACCEL).coerceIn(-1f, 1f)
-        val next = w.track.gaps.filter { it.full && it.s1 > w.s }.minByOrNull { it.s0 }
+        val level = if (w.groundLevel < -0.5f) w.track.lowGaps else w.track.gaps
+        val next = level.filter { it.full && it.s1 > w.s }.minByOrNull { it.s0 }
         val jump = jumping && next != null && next.s0 - w.s in 0f..2.5f
         return GameInput(steer = steer, throttle = throttle, jump = jump)
     }
@@ -68,12 +69,12 @@ class GameWorldTest {
         // In den ersten 30 m gibt es keine Lücke: der Sprung-Befehl muss wirkungslos bleiben
         val w = GameWorld(Random(1))
         repeat(60) { w.update(1f / 60f, GameInput(jump = true)) }
-        assertTrue(w.h <= 0f)
+        assertTrue(w.y <= 0f)
         // Direkt vor einer durchgehenden Lücke geht der Sprung
         val full = w.track.gaps.first { it.full }
         while (full.s0 - w.s > 3f && !w.gameOver) w.update(1f / 60f, pilot(w, jumping = false))
         w.update(1f / 60f, GameInput(jump = true))
-        assertTrue(w.h > 0f)
+        assertTrue(w.y > 0f)
     }
 
     @Test
@@ -139,6 +140,45 @@ class GameWorldTest {
             }
         }
         assertTrue("Keine Abzweigung gefunden", forks > 0)
+    }
+
+    @Test
+    fun decksExist() {
+        var decks = 0
+        for (seed in 1..10) {
+            val t = Track(Random(seed))
+            t.ensure(3000f)
+            decks += t.decks.size
+        }
+        assertTrue("Kein Doppeldecker gefunden", decks > 0)
+    }
+
+    @Test
+    fun droppingOffTheEdgeLandsOnTheLowerDeck() {
+        // Erst ein Doppeldecker-Abschnitt suchen, dann am Anfang seitlich über den Rand rollen
+        var tested = 0
+        for (seed in 1..10) {
+            val w = GameWorld(Random(seed))
+            val t = w.track
+            t.ensure(3000f)
+            val deck = t.decks.firstOrNull { it.s0 < 900f } ?: continue
+            // Bis kurz hinter den Anfang des Abschnitts normal fahren
+            var time = 0f
+            while (w.s < deck.s0 + 6f && !w.gameOver && time < 400f) {
+                w.update(1f / 60f, pilot(w)); time += 1f / 60f
+            }
+            if (w.gameOver) continue
+            // Dann nach rechts über den Rand rollen und fallen lassen
+            time = 0f
+            while (time < 3f && !w.gameOver) {
+                w.update(1f / 60f, GameInput(throttle = -1f, steer = if (w.u < 2.2f) 1f else 0f)); time += 1f / 60f
+            }
+            if (!w.gameOver) {
+                assertTrue("Seed $seed: Kugel nicht auf der unteren Bahn (y=${w.y})", w.y < -2f && w.grounded)
+                tested++
+            }
+        }
+        assertTrue("Kein Test lief durch", tested > 0)
     }
 
     @Test
