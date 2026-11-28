@@ -17,4 +17,4 @@ Endlos-Kugelspiel für Android, gesteuert per Neigung und Ruck (Kotlin, Jetpack 
 
 ## Bauen
 In Android Studio öffnen und auf einem echten Gerät starten (Sensoren!).
-Unit-Tests der Spiellogik: `gradle :app:testDebugUnitTest` (Android Studio: Rechtsklick auf `GameEngineTest`).
+Unit-Tests der Spiellogik: `./gradlew :app:testDebugUnitTest` (Android Studio: Rechtsklick auf `GameEngineTest`).

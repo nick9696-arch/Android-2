@@ -15,18 +15,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # Android-SDK ist auf den GitHub-Runnern bereits installiert.
-      # Es gibt keinen Gradle-Wrapper im Repo, daher wird Gradle hier bereitgestellt.
+      # Android-SDK ist auf den GitHub-Runnern bereits installiert, Gradle kommt aus dem Wrapper.
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
 
       - name: Unit-Tests
-        run: gradle :app:testDebugUnitTest --no-daemon
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
 
       - name: Debug-APK bauen
         if: ${{ !cancelled() }}
-        run: gradle :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
